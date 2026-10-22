@@ -1,0 +1,8 @@
+{
+  "name": "SK Nexus Notes",
+  "description": "Offline-first smart notes manager built with Room Database and Jetpack Compose.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
