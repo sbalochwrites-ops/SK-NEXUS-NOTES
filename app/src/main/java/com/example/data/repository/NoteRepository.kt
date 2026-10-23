@@ -2,7 +2,9 @@ package com.example.data.repository
 
 import com.example.data.local.NoteDao
 import com.example.data.local.NoteEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class NoteRepository(private val noteDao: NoteDao) {
 
@@ -24,27 +26,27 @@ class NoteRepository(private val noteDao: NoteDao) {
         }
     }
 
-    suspend fun insertNote(note: NoteEntity): Long {
-        return noteDao.insertNote(note)
+    suspend fun insertNote(note: NoteEntity): Long = withContext(Dispatchers.IO) {
+        noteDao.insertNote(note)
     }
 
-    suspend fun updateNote(note: NoteEntity) {
+    suspend fun updateNote(note: NoteEntity) = withContext(Dispatchers.IO) {
         noteDao.updateNote(note)
     }
 
-    suspend fun deleteNote(note: NoteEntity) {
+    suspend fun deleteNote(note: NoteEntity) = withContext(Dispatchers.IO) {
         noteDao.deleteNote(note)
     }
 
-    suspend fun deleteNoteById(id: Long) {
+    suspend fun deleteNoteById(id: Long) = withContext(Dispatchers.IO) {
         noteDao.deleteNoteById(id)
     }
 
-    suspend fun togglePin(id: Long, isPinned: Boolean) {
+    suspend fun togglePin(id: Long, isPinned: Boolean) = withContext(Dispatchers.IO) {
         noteDao.setPinned(id, !isPinned)
     }
 
-    suspend fun seedInitialDataIfEmpty() {
+    suspend fun seedInitialDataIfEmpty() = withContext(Dispatchers.IO) {
         if (noteDao.getNotesCount() == 0) {
             val defaultNotes = listOf(
                 NoteEntity(

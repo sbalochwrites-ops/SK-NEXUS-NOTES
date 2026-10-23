@@ -29,12 +29,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -79,7 +85,9 @@ import org.json.JSONObject
 @Composable
 fun NotesScreen(
     viewModel: NoteViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    userEmail: String? = null,
+    onSignOut: () -> Unit = {}
 ) {
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
@@ -177,7 +185,11 @@ fun NotesScreen(
                 }
                 3 -> {
                     // Settings & Backup Tab View
-                    SettingsTabView(allNotes = allNotesList)
+                    SettingsTabView(
+                        allNotes = allNotesList,
+                        userEmail = userEmail,
+                        onSignOut = onSignOut
+                    )
                 }
                 else -> {
                     if (notesList.isEmpty()) {
@@ -199,11 +211,58 @@ fun NotesScreen(
                                 items = notesList,
                                 key = { it.id }
                             ) { note ->
-                                NoteCard(
-                                    note = note,
-                                    onClick = { viewModel.onOpenEditNote(note) },
-                                    onPinClick = { viewModel.onPinToggle(note) }
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { dismissValue ->
+                                        if (dismissValue == SwipeToDismissBoxValue.EndToStart || dismissValue == SwipeToDismissBoxValue.StartToEnd) {
+                                            viewModel.onDeleteNote(note)
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    }
                                 )
+
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("swipe_dismiss_${note.id}"),
+                                    backgroundContent = {
+                                        val direction = dismissState.dismissDirection
+                                        val alignment = when (direction) {
+                                            SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                            SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                                            else -> Alignment.CenterEnd
+                                        }
+                                        val containerColor = if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) {
+                                            MaterialTheme.colorScheme.errorContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceVariant
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(containerColor)
+                                                .padding(horizontal = 20.dp),
+                                            contentAlignment = alignment
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete Note",
+                                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                ) {
+                                    NoteCard(
+                                        note = note,
+                                        onClick = { viewModel.onOpenEditNote(note) },
+                                        onPinClick = { viewModel.onPinToggle(note) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -230,7 +289,11 @@ fun NotesScreen(
 }
 
 @Composable
-fun SettingsTabView(allNotes: List<NoteEntity>) {
+fun SettingsTabView(
+    allNotes: List<NoteEntity>,
+    userEmail: String? = null,
+    onSignOut: () -> Unit = {}
+) {
     val context = LocalContext.current
 
     // JSON Backup Document Creator Launcher
@@ -295,6 +358,69 @@ fun SettingsTabView(allNotes: List<NoteEntity>) {
                 color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 20.sp
             )
+        }
+
+        // Account & Cloud Sync Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                border = BorderStroke(1.dp, DarkOutline)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CloudDone,
+                                contentDescription = null,
+                                tint = DarkPrimary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Firebase Firestore Cloud",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = userEmail ?: "Google Account Connected",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = onSignOut,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("sign_out_button")
+                        ) {
+                            Text(
+                                text = "Sign Out",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Database Status Card
