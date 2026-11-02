@@ -10,10 +10,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,16 +27,23 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Title
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -44,11 +51,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -72,9 +81,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.data.local.NoteEntity
+import com.example.ui.AiAssistState
 import com.example.ui.theme.DarkOnPrimary
 import com.example.ui.theme.DarkOnPrimaryContainer
 import com.example.ui.theme.DarkOutline
@@ -92,6 +103,13 @@ fun AddEditNoteDialog(
     onDismiss: () -> Unit,
     onSave: (title: String, content: String, category: String, tags: String, isPinned: Boolean) -> Unit,
     onDelete: (NoteEntity) -> Unit,
+    aiAssistState: AiAssistState = AiAssistState.Idle,
+    onEnhanceWithGemini: (
+        title: String,
+        content: String,
+        mode: String,
+        onResult: (title: String, content: String, category: String, tags: List<String>) -> Unit
+    ) -> Unit = { _, _, _, _ -> },
     onAutoSave: (id: Long?, title: String, content: String, category: String, tags: String, isPinned: Boolean, onSaved: (Long) -> Unit) -> Unit = { _, _, _, _, _, _, _ -> }
 ) {
     val context = LocalContext.current
@@ -179,7 +197,7 @@ fun AddEditNoteDialog(
 
         if (!isInitialState && (title.isNotBlank() || content.isNotBlank())) {
             autoSaveStatus = "saving"
-            delay(1200) // Debounce period while user is typing
+            delay(1200)
             onAutoSave(
                 currentNoteId,
                 title,
@@ -194,11 +212,14 @@ fun AddEditNoteDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -225,7 +246,6 @@ fun AddEditNoteDialog(
                             fontSize = 20.sp
                         )
 
-                        // Auto-Save status badge
                         if (autoSaveStatus != null) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -249,7 +269,6 @@ fun AddEditNoteDialog(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Voice-to-Text Transcription Button
                         IconButton(
                             onClick = { triggerVoiceTranscription() },
                             modifier = Modifier.testTag("voice_input_button")
@@ -261,7 +280,6 @@ fun AddEditNoteDialog(
                             )
                         }
 
-                        // Share Action Button
                         IconButton(
                             onClick = {
                                 val joinedTags = tagsList.joinToString(", ")
@@ -308,7 +326,7 @@ fun AddEditNoteDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Title Input Field
                 OutlinedTextField(
@@ -329,9 +347,111 @@ fun AddEditNoteDialog(
                         .testTag("note_title_input")
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-                // Content Input Field with Voice input shortcut
+                // Text Formatting Toolbar
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, DarkOutline),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = {
+                                content = if (content.isEmpty()) "**Bold text**" else "$content **bold**"
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("format_bold_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FormatBold,
+                                contentDescription = "Bold",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                content = if (content.isEmpty()) "*Italic text*" else "$content *italic*"
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("format_italic_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FormatItalic,
+                                contentDescription = "Italic",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val prefix = if (content.isEmpty() || content.endsWith("\n")) "• " else "\n• "
+                                content += prefix
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("format_bullet_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                                contentDescription = "Bullet List",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val prefix = if (content.isEmpty() || content.endsWith("\n")) "- [ ] " else "\n- [ ] "
+                                content += prefix
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("format_checklist_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckBox,
+                                contentDescription = "Checklist Item",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val prefix = if (content.isEmpty() || content.endsWith("\n")) "## " else "\n## "
+                                content += prefix
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("format_heading_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Title,
+                                contentDescription = "Heading",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Content Input Field
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
@@ -350,6 +470,111 @@ fun AddEditNoteDialog(
                         .fillMaxWidth()
                         .testTag("note_content_input")
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Gemini AI Smart Writing Assistant Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            onEnhanceWithGemini(title, content, "enhance") { newTitle, newContent, newCat, newTags ->
+                                title = newTitle
+                                content = newContent
+                                if (EDITABLE_CATEGORIES.contains(newCat)) {
+                                    category = newCat
+                                }
+                                val merged = (tagsList + newTags).distinct()
+                                tagsList = merged
+                            }
+                        },
+                        enabled = aiAssistState !is AiAssistState.Loading,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("gemini_enhance_button")
+                    ) {
+                        if (aiAssistState is AiAssistState.Loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = DarkPrimary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = DarkPrimary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "AI Enhance",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            onEnhanceWithGemini(title, content, "summarize") { newTitle, newContent, newCat, newTags ->
+                                title = newTitle
+                                content = newContent
+                                if (EDITABLE_CATEGORIES.contains(newCat)) {
+                                    category = newCat
+                                }
+                                val merged = (tagsList + newTags).distinct()
+                                tagsList = merged
+                            }
+                        },
+                        enabled = aiAssistState !is AiAssistState.Loading,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("gemini_summarize_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Summarize,
+                            contentDescription = null,
+                            tint = DarkPrimary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "AI Summarize",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                when (aiAssistState) {
+                    is AiAssistState.Success -> {
+                        Text(
+                            text = aiAssistState.message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = DarkPrimary,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    is AiAssistState.Error -> {
+                        Text(
+                            text = aiAssistState.error,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    else -> {}
+                }
 
                 Spacer(modifier = Modifier.height(6.dp))
 
@@ -389,7 +614,6 @@ fun AddEditNoteDialog(
                         }
                     }
 
-                    // Quick Voice Dictation Assist Chip
                     AssistChip(
                         onClick = { triggerVoiceTranscription() },
                         label = { Text(stringResource(id = R.string.voice_input), fontSize = 11.sp) },
@@ -466,7 +690,7 @@ fun AddEditNoteDialog(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Default.Label,
+                            imageVector = Icons.AutoMirrored.Filled.Label,
                             contentDescription = null,
                             tint = DarkPrimary,
                             modifier = Modifier.size(16.dp)
@@ -612,7 +836,7 @@ fun AddEditNoteDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Pin Note Toggle (Pin feature to keep notes at top)
+                // Pin Note Toggle
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,

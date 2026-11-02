@@ -30,17 +30,16 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Label
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.material3.rememberSwipeToDismissBoxState
-import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -48,14 +47,21 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -71,6 +77,7 @@ import com.example.ui.components.CategoryFilterChips
 import com.example.ui.components.NexusBottomNavBar
 import com.example.ui.components.NexusHeader
 import com.example.ui.components.NoteCard
+import com.example.ui.components.NotesDashboardCard
 import com.example.ui.components.SearchBarComponent
 import com.example.ui.components.SortMenuComponent
 import com.example.ui.components.TagFilterChips
@@ -87,7 +94,14 @@ fun NotesScreen(
     viewModel: NoteViewModel,
     modifier: Modifier = Modifier,
     userEmail: String? = null,
-    onSignOut: () -> Unit = {}
+    onSignOut: () -> Unit = {},
+    isDarkTheme: Boolean = true,
+    onToggleDarkTheme: (Boolean) -> Unit = {},
+    isDynamicColor: Boolean = false,
+    onToggleDynamicColor: (Boolean) -> Unit = {},
+    isBiometricLockEnabled: Boolean = false,
+    onToggleBiometricLock: (Boolean) -> Unit = {},
+    onLockAppNow: () -> Unit = {}
 ) {
     val searchQuery by viewModel.searchQuery.collectAsState()
     val selectedCategory by viewModel.selectedCategory.collectAsState()
@@ -99,6 +113,8 @@ fun NotesScreen(
     val isAddEditOpen by viewModel.isAddEditOpen.collectAsState()
     val editingNote by viewModel.editingNote.collectAsState()
     val notesList by viewModel.notesState.collectAsState()
+    val aiAssistState by viewModel.aiAssistState.collectAsState()
+    val cloudSyncStatus by viewModel.cloudSyncStatus.collectAsState()
 
     Scaffold(
         modifier = modifier
@@ -168,7 +184,6 @@ fun NotesScreen(
 
             when (activeTab) {
                 1 -> {
-                    // Dedicated Labels & Tags Management View
                     LabelsTabView(
                         allTags = allTagsList,
                         allNotes = allNotesList,
@@ -180,33 +195,44 @@ fun NotesScreen(
                     )
                 }
                 2 -> {
-                    // Reminders Tab View
                     RemindersTabView()
                 }
                 3 -> {
-                    // Settings & Backup Tab View
                     SettingsTabView(
                         allNotes = allNotesList,
                         userEmail = userEmail,
-                        onSignOut = onSignOut
+                        onSignOut = onSignOut,
+                        cloudSyncStatus = cloudSyncStatus,
+                        onSyncNow = { viewModel.syncNotesWithFirestore() },
+                        isDarkTheme = isDarkTheme,
+                        onToggleDarkTheme = onToggleDarkTheme,
+                        isDynamicColor = isDynamicColor,
+                        onToggleDynamicColor = onToggleDynamicColor,
+                        isBiometricLockEnabled = isBiometricLockEnabled,
+                        onToggleBiometricLock = onToggleBiometricLock,
+                        onLockAppNow = onLockAppNow
                     )
                 }
                 else -> {
-                    if (notesList.isEmpty()) {
-                        EmptyNotesView(
-                            query = searchQuery,
-                            category = selectedCategory,
-                            tag = selectedTag,
-                            onAddClick = { viewModel.onOpenAddNote() }
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 20.dp),
-                            contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(top = 4.dp, bottom = 80.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item(key = "analytics_dashboard_card") {
+                            NotesDashboardCard(allNotes = allNotesList)
+                        }
+
+                        if (notesList.isEmpty()) {
+                            item(key = "empty_notes_view") {
+                                EmptyNotesView(
+                                    query = searchQuery,
+                                    category = selectedCategory,
+                                    tag = selectedTag,
+                                    onAddClick = { viewModel.onOpenAddNote() }
+                                )
+                            }
+                        } else {
                             items(
                                 items = notesList,
                                 key = { it.id }
@@ -222,46 +248,48 @@ fun NotesScreen(
                                     }
                                 )
 
-                                SwipeToDismissBox(
-                                    state = dismissState,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("swipe_dismiss_${note.id}"),
-                                    backgroundContent = {
-                                        val direction = dismissState.dismissDirection
-                                        val alignment = when (direction) {
-                                            SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-                                            SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
-                                            else -> Alignment.CenterEnd
-                                        }
-                                        val containerColor = if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) {
-                                            MaterialTheme.colorScheme.errorContainer
-                                        } else {
-                                            MaterialTheme.colorScheme.surfaceVariant
-                                        }
+                                Box(modifier = Modifier.padding(horizontal = 20.dp)) {
+                                    SwipeToDismissBox(
+                                        state = dismissState,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("swipe_dismiss_${note.id}"),
+                                        backgroundContent = {
+                                            val direction = dismissState.dismissDirection
+                                            val alignment = when (direction) {
+                                                SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                                                SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                                                else -> Alignment.CenterEnd
+                                            }
+                                            val containerColor = if (dismissState.targetValue != SwipeToDismissBoxValue.Settled) {
+                                                MaterialTheme.colorScheme.errorContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.surfaceVariant
+                                            }
 
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .clip(RoundedCornerShape(16.dp))
-                                                .background(containerColor)
-                                                .padding(horizontal = 20.dp),
-                                            contentAlignment = alignment
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "Delete Note",
-                                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                                modifier = Modifier.size(24.dp)
-                                            )
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .background(containerColor)
+                                                    .padding(horizontal = 20.dp),
+                                                contentAlignment = alignment
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Delete Note",
+                                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            }
                                         }
+                                    ) {
+                                        NoteCard(
+                                            note = note,
+                                            onClick = { viewModel.onOpenEditNote(note) },
+                                            onPinClick = { viewModel.onPinToggle(note) }
+                                        )
                                     }
-                                ) {
-                                    NoteCard(
-                                        note = note,
-                                        onClick = { viewModel.onOpenEditNote(note) },
-                                        onPinClick = { viewModel.onPinToggle(note) }
-                                    )
                                 }
                             }
                         }
@@ -273,7 +301,10 @@ fun NotesScreen(
         if (isAddEditOpen) {
             AddEditNoteDialog(
                 note = editingNote,
-                onDismiss = { viewModel.onCloseDialog() },
+                onDismiss = {
+                    viewModel.clearAiAssistState()
+                    viewModel.onCloseDialog()
+                },
                 onSave = { title, content, category, tags, isPinned ->
                     viewModel.onSaveNote(title, content, category, tags, isPinned)
                 },
@@ -282,6 +313,10 @@ fun NotesScreen(
                 },
                 onAutoSave = { id, title, content, category, tags, isPinned, onSaved ->
                     viewModel.onAutoSave(id, title, content, category, tags, isPinned, onSaved)
+                },
+                aiAssistState = aiAssistState,
+                onEnhanceWithGemini = { title, content, mode, onResult ->
+                    viewModel.enhanceNoteWithGemini(title, content, mode, onResult)
                 }
             )
         }
@@ -292,7 +327,16 @@ fun NotesScreen(
 fun SettingsTabView(
     allNotes: List<NoteEntity>,
     userEmail: String? = null,
-    onSignOut: () -> Unit = {}
+    onSignOut: () -> Unit = {},
+    cloudSyncStatus: String? = null,
+    onSyncNow: () -> Unit = {},
+    isDarkTheme: Boolean = true,
+    onToggleDarkTheme: (Boolean) -> Unit = {},
+    isDynamicColor: Boolean = false,
+    onToggleDynamicColor: (Boolean) -> Unit = {},
+    isBiometricLockEnabled: Boolean = false,
+    onToggleBiometricLock: (Boolean) -> Unit = {},
+    onLockAppNow: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -415,6 +459,233 @@ fun SettingsTabView(
                             Text(
                                 text = "Sign Out",
                                 style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        onClick = onSyncNow,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DarkPrimary,
+                            contentColor = DarkOnPrimary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sync_firestore_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudSync,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Sync Now with Cloud Firestore",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (!cloudSyncStatus.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = cloudSyncStatus,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = DarkPrimary,
+                            modifier = Modifier.testTag("cloud_sync_status_text")
+                        )
+                    }
+                }
+            }
+        }
+
+        // Theme & Appearance Card (Light/Dark + Material 3 Dynamic Color)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                border = BorderStroke(1.dp, DarkOutline)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Palette,
+                            contentDescription = null,
+                            tint = DarkPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Theme & Material 3 Appearance",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Customize Dark Mode and Dynamic Wallpaper Colors",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DarkMode,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = if (isDarkTheme) "Dark Theme Active" else "Light Theme Active",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Switch between Dark and Light surfaces",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isDarkTheme,
+                            onCheckedChange = onToggleDarkTheme,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DarkOnPrimary,
+                                checkedTrackColor = DarkPrimary
+                            ),
+                            modifier = Modifier.testTag("theme_mode_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Material 3 Dynamic Color",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Adapt palette to Android 12+ system wallpaper",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isDynamicColor,
+                            onCheckedChange = onToggleDynamicColor,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DarkOnPrimary,
+                                checkedTrackColor = DarkPrimary
+                            ),
+                            modifier = Modifier.testTag("dynamic_color_switch")
+                        )
+                    }
+                }
+            }
+        }
+
+        // Biometric & Startup Vault Lock Card
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                border = BorderStroke(1.dp, DarkOutline)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Fingerprint,
+                                contentDescription = null,
+                                tint = DarkPrimary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Biometric App Lock",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Require fingerprint / face or device unlock on startup",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isBiometricLockEnabled,
+                            onCheckedChange = onToggleBiometricLock,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DarkOnPrimary,
+                                checkedTrackColor = DarkPrimary
+                            ),
+                            modifier = Modifier.testTag("biometric_lock_switch")
+                        )
+                    }
+
+                    if (isBiometricLockEnabled) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = onLockAppNow,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, DarkPrimary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("lock_vault_now_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = DarkPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Lock Vault Now",
+                                color = DarkPrimary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -609,7 +880,7 @@ fun SettingsTabView(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "SK Nexus Notes: Clean Jetpack Compose architecture with Room offline database, voice dictation, tagging, and pin management.",
+                        text = "SK Nexus Notes: Clean Jetpack Compose architecture with Room offline database, Firebase Firestore cloud sync, Gemini AI assistant, and biometric lock.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
@@ -797,7 +1068,7 @@ fun EmptyNotesView(
 ) {
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -839,7 +1110,7 @@ fun EmptyNotesView(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Tap the + button below to create a note stored safely in your local Room Database.",
+            text = "Tap the + button below to create a note stored safely in your local Room Database and Cloud Firestore.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

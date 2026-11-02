@@ -1,23 +1,36 @@
 package com.example.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.firestore.FirestoreNoteRepository
 import com.example.data.local.AppDatabase
 import com.example.data.local.NoteEntity
 import com.example.data.repository.NoteRepository
+import com.google.firebase.Firebase
+import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.generationConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
+
+private const val TAG = "NoteViewModel"
 
 enum class NoteSortOrder(val displayName: String) {
     MODIFIED_DATE("Modified Date"),
@@ -25,9 +38,44 @@ enum class NoteSortOrder(val displayName: String) {
     ALPHABETICAL("Alphabetical")
 }
 
+sealed interface AiAssistState {
+    data object Idle : AiAssistState
+    data object Loading : AiAssistState
+    data class Success(val message: String) : AiAssistState
+    data class Error(val error: String) : AiAssistState
+}
+
 class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: NoteRepository
+    private val firestoreRepository: FirestoreNoteRepository by lazy {
+        FirestoreNoteRepository(application)
+    }
+
+    private val noteAnalysisSchema = Schema.obj(
+        properties = mapOf(
+            "enhancedTitle" to Schema.string(description = "A concise, clear title for the note"),
+            "enhancedContent" to Schema.string(description = "Enhanced, structured, and well-formatted note content"),
+            "suggestedCategory" to Schema.enumeration(
+                values = listOf("Personal", "Work", "Ideas", "Study", "General"),
+                description = "Best matching category"
+            ),
+            "suggestedTags" to Schema.array(
+                items = Schema.string(),
+                description = "Up to 4 relevant tags without # prefix"
+            )
+        )
+    )
+
+    private val aiModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = "gemini-3.8-flash",
+            generationConfig = generationConfig {
+                responseMimeType = "application/json"
+                responseSchema = noteAnalysisSchema
+            }
+        )
+    }
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -49,6 +97,12 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _editingNote = MutableStateFlow<NoteEntity?>(null)
     val editingNote: StateFlow<NoteEntity?> = _editingNote.asStateFlow()
+
+    private val _aiAssistState = MutableStateFlow<AiAssistState>(AiAssistState.Idle)
+    val aiAssistState: StateFlow<AiAssistState> = _aiAssistState.asStateFlow()
+
+    private val _cloudSyncStatus = MutableStateFlow<String?>(null)
+    val cloudSyncStatus: StateFlow<String?> = _cloudSyncStatus.asStateFlow()
 
     val allNotesList: StateFlow<List<NoteEntity>>
 
@@ -158,17 +212,138 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onOpenAddNote() {
         _editingNote.value = null
+        _aiAssistState.value = AiAssistState.Idle
         _isAddEditOpen.value = true
     }
 
     fun onOpenEditNote(note: NoteEntity) {
         _editingNote.value = note
+        _aiAssistState.value = AiAssistState.Idle
         _isAddEditOpen.value = true
     }
 
     fun onCloseDialog() {
         _isAddEditOpen.value = false
         _editingNote.value = null
+        _aiAssistState.value = AiAssistState.Idle
+    }
+
+    fun clearAiAssistState() {
+        _aiAssistState.value = AiAssistState.Idle
+    }
+
+    fun enhanceNoteWithGemini(
+        currentTitle: String,
+        currentContent: String,
+        mode: String = "enhance",
+        onResult: (title: String, content: String, category: String, tags: List<String>) -> Unit
+    ) {
+        if (currentTitle.isBlank() && currentContent.isBlank()) {
+            _aiAssistState.value = AiAssistState.Error("Write a title or draft content first so Gemini can assist.")
+            return
+        }
+
+        viewModelScope.launch {
+            _aiAssistState.value = AiAssistState.Loading
+            try {
+                val prompt = when (mode) {
+                    "summarize" -> """
+                        Summarize and structure the following note into concise bullet points with a clear title, best category, and relevant tags.
+                        Title: $currentTitle
+                        Content: $currentContent
+                    """.trimIndent()
+                    else -> """
+                        Enhance, polish, and organize the following note for clarity and readability while preserving its core meaning. Also suggest a strong title, matching category, and relevant tags.
+                        Title: $currentTitle
+                        Content: $currentContent
+                    """.trimIndent()
+                }
+
+                val response = withTimeout(60_000L) {
+                    aiModel.generateContent(prompt)
+                }
+
+                val jsonString = response.text ?: throw IllegalStateException("Gemini returned an empty response.")
+                val json = JSONObject(jsonString)
+                val newTitle = json.optString("enhancedTitle", currentTitle).ifBlank { currentTitle }
+                val newContent = json.optString("enhancedContent", currentContent).ifBlank { currentContent }
+                val suggestedCategory = json.optString("suggestedCategory", "Personal")
+                val tagsArray = json.optJSONArray("suggestedTags")
+                val suggestedTags = mutableListOf<String>()
+                if (tagsArray != null) {
+                    for (i in 0 until tagsArray.length()) {
+                        val tag = tagsArray.optString(i).trim().removePrefix("#")
+                        if (tag.isNotBlank()) suggestedTags.add(tag)
+                    }
+                }
+
+                onResult(newTitle, newContent, suggestedCategory, suggestedTags)
+                _aiAssistState.value = AiAssistState.Success(
+                    if (mode == "summarize") "Summarized with Gemini AI" else "Enhanced with Gemini AI"
+                )
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Gemini AI request timed out", e)
+                _aiAssistState.value = AiAssistState.Error("Gemini AI request timed out after 60s. Please try again.")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Gemini AI generation failed", e)
+                _aiAssistState.value = AiAssistState.Error(e.localizedMessage ?: "Gemini AI enhancement failed.")
+            }
+        }
+    }
+
+    fun syncNotesWithFirestore() {
+        viewModelScope.launch {
+            _cloudSyncStatus.value = "Syncing with Cloud Firestore..."
+            try {
+                val localNotes = allNotesList.value
+                var syncedCount = 0
+                for (note in localNotes) {
+                    val docId = "note_${note.id}"
+                    firestoreRepository.createNote(
+                        title = note.title.ifBlank { "Untitled Note" },
+                        content = note.content,
+                        category = note.category,
+                        tags = note.tags,
+                        isPinned = note.isPinned,
+                        customId = docId
+                    )
+                    syncedCount++
+                }
+
+                // Also pull any cloud notes that aren't stored locally
+                val cloudNotes = withTimeout(15_000L) {
+                    firestoreRepository.observeNotes().first()
+                }
+                val existingTitlesAndContent = localNotes.map { "${it.title}|${it.content}" }.toSet()
+                var importedCount = 0
+                for (cloudNote in cloudNotes) {
+                    val signature = "${cloudNote.title}|${cloudNote.content}"
+                    if (signature !in existingTitlesAndContent && (cloudNote.title.isNotBlank() || cloudNote.content.isNotBlank())) {
+                        repository.insertNote(
+                            NoteEntity(
+                                title = cloudNote.title,
+                                content = cloudNote.content,
+                                category = cloudNote.category,
+                                tags = cloudNote.tags,
+                                isPinned = cloudNote.isPinned,
+                                updatedAt = cloudNote.updatedAt?.toDate()?.time ?: System.currentTimeMillis()
+                            )
+                        )
+                        importedCount++
+                    }
+                }
+
+                _cloudSyncStatus.value = "Synced $syncedCount notes to Cloud" +
+                        if (importedCount > 0) " ($importedCount imported)" else ""
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Cloud Firestore sync failed", e)
+                _cloudSyncStatus.value = "Sync failed: ${e.localizedMessage ?: "Unknown error"}"
+            }
+        }
     }
 
     fun onSaveNote(title: String, content: String, category: String, tags: String, isPinned: Boolean) {
@@ -176,6 +351,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             val currentEditing = _editingNote.value
+            val savedId: Long
             if (currentEditing != null && currentEditing.id != 0L) {
                 val updated = currentEditing.copy(
                     title = title.trim(),
@@ -186,6 +362,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                     updatedAt = System.currentTimeMillis()
                 )
                 repository.updateNote(updated)
+                savedId = updated.id
             } else {
                 val newNote = NoteEntity(
                     title = title.trim().ifEmpty { "Untitled Note" },
@@ -195,9 +372,23 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                     isPinned = isPinned,
                     updatedAt = System.currentTimeMillis()
                 )
-                repository.insertNote(newNote)
+                savedId = repository.insertNote(newNote)
             }
             onCloseDialog()
+
+            // Mirror to Firestore asynchronously if signed in
+            try {
+                firestoreRepository.createNote(
+                    title = title.trim().ifEmpty { "Untitled Note" },
+                    content = content.trim(),
+                    category = category,
+                    tags = tags.trim(),
+                    isPinned = isPinned,
+                    customId = "note_$savedId"
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Background Firestore mirror skipped: ${e.message}")
+            }
         }
     }
 
@@ -255,6 +446,11 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.deleteNote(note)
             onCloseDialog()
+            try {
+                firestoreRepository.deleteNote("note_${note.id}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Background Firestore delete skipped: ${e.message}")
+            }
         }
     }
 }
