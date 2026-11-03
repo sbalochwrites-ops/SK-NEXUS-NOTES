@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">SK Nexus Notes</string>
-    <string name="search_notes">Search your notes</string>
+    <string name="search_notes">Search your notes or tap for recent queries</string>
     <string name="no_notes_found">No notes found</string>
     <string name="offline_ready">Offline Storage Enabled (Room DB)</string>
     <string name="add_note">Add Note</string>
@@ -31,8 +31,27 @@
     <string name="voice_input">Voice to Text</string>
     <string name="voice_input_listening">Listening for voice...</string>
     <string name="word_count">%1$d words • %2$d chars</string>
-    <string name="backup_all">Backup All Notes</string>
-    <string name="backup_description">Export all notes into a JSON backup file on your device storage.</string>
+    <string name="backup_all">Local Backup &amp; Restore (JSON / TXT)</string>
+    <string name="backup_description">Export all notes as JSON or Plain Text files for local backups, or restore notes from a backup file directly into your Room Database.</string>
     <string name="backup_success">All notes successfully backed up to JSON</string>
+    <string name="backup_txt_success">All notes successfully exported to Text file</string>
     <string name="backup_error">Failed to export backup</string>
+    <string name="recent_searches">Recent Searches</string>
+    <string name="clear_all">Clear All</string>
+    <string name="settings">Settings</string>
+    <string name="theme_appearance">Appearance &amp; Theme</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_system_desc">Follows your Android device\'s system theme setting.</string>
+    <string name="theme_light_desc">Always use a clean, crisp light theme.</string>
+    <string name="theme_dark_desc">Always use an elegant, high-contrast dark theme.</string>
+    <string name="notification_preferences">Notification Preferences</string>
+    <string name="enable_notifications">Enable Notifications</string>
+    <string name="daily_reminders">Daily Note Reminders</string>
+    <string name="pinned_alerts">Pinned Notes Alerts</string>
+    <string name="sync_alerts">Cloud Sync &amp; Backup Alerts</string>
+    <string name="sound_vibrate">Sound &amp; Vibration</string>
+    <string name="privacy_policy">Privacy Policy</string>
+    <string name="privacy_policy_desc">Review our zero-trust data protection, on-device SQLite storage, and Firestore rules.</string>
 </resources>

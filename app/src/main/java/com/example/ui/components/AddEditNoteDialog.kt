@@ -3,10 +3,14 @@ package com.example.ui.components
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Summarize
@@ -66,6 +71,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +79,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -92,9 +99,15 @@ import com.example.ui.theme.DarkOutline
 import com.example.ui.theme.DarkPrimary
 import com.example.ui.theme.DarkPrimaryContainer
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 val EDITABLE_CATEGORIES = listOf("Personal", "Work", "Ideas", "Study", "General")
 val SUGGESTED_TAGS = listOf("Important", "Urgent", "Meeting", "Sprint", "Design", "Dev", "Review", "Shopping")
+
+enum class VoiceDictationTarget {
+    TITLE,
+    CONTENT
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -110,7 +123,8 @@ fun AddEditNoteDialog(
         mode: String,
         onResult: (title: String, content: String, category: String, tags: List<String>) -> Unit
     ) -> Unit = { _, _, _, _ -> },
-    onAutoSave: (id: Long?, title: String, content: String, category: String, tags: String, isPinned: Boolean, onSaved: (Long) -> Unit) -> Unit = { _, _, _, _, _, _, _ -> }
+    onAutoSave: (id: Long?, title: String, content: String, category: String, tags: String, isPinned: Boolean, onSaved: (Long) -> Unit) -> Unit = { _, _, _, _, _, _, _ -> },
+    startVoiceOnLaunch: Boolean = false
 ) {
     val context = LocalContext.current
 
@@ -129,6 +143,34 @@ fun AddEditNoteDialog(
     var autoSaveStatus by remember { mutableStateOf<String?>(null) } // "saving", "saved", null
     var showDeleteConfirmation by remember { mutableStateOf(false) }
 
+    // Speech-to-Text state
+    var voiceTarget by remember { mutableStateOf(VoiceDictationTarget.CONTENT) }
+    var isListeningLive by remember { mutableStateOf(false) }
+    var livePartialSpeech by remember { mutableStateOf("") }
+    var speechRecognizerRef by remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    val appendSpokenText: (String) -> Unit = { spokenText ->
+        val clean = spokenText.trim()
+        if (clean.isNotEmpty()) {
+            if (voiceTarget == VoiceDictationTarget.TITLE) {
+                title = if (title.isBlank()) clean else "$title $clean"
+            } else {
+                content = if (content.isBlank()) clean else "$content $clean"
+            }
+            Toast.makeText(context, "Dictated: \"$clean\"", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                speechRecognizerRef?.destroy()
+            } catch (_: Exception) {
+            }
+            speechRecognizerRef = null
+        }
+    }
+
     // Dynamic Word and Character Count calculation
     val wordCount = remember(content) {
         if (content.isBlank()) 0
@@ -136,17 +178,108 @@ fun AddEditNoteDialog(
     }
     val charCount = remember(content) { content.length }
 
-    // Speech-to-Text Recognition Launcher
+    // Fallback Intent Speech-to-Text Recognition Launcher
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        isListeningLive = false
+        livePartialSpeech = ""
         if (result.resultCode == Activity.RESULT_OK) {
             val spokenList = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             val spokenText = spokenList?.firstOrNull()
             if (!spokenText.isNullOrBlank()) {
-                content = if (content.isBlank()) spokenText else "$content $spokenText"
-                Toast.makeText(context, "Transcribed: \"$spokenText\"", Toast.LENGTH_SHORT).show()
+                appendSpokenText(spokenText)
             }
+        }
+    }
+
+    val launchSpeechIntentFallback = {
+        val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_input_listening))
+        }
+        try {
+            speechLauncher.launch(speechIntent)
+        } catch (e: Exception) {
+            isListeningLive = false
+            Toast.makeText(context, "Voice recognition service unavailable on this device", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val startAndroidSpeechRecognition = {
+        if (isListeningLive) {
+            try {
+                speechRecognizerRef?.stopListening()
+            } catch (_: Exception) {
+            }
+            isListeningLive = false
+            livePartialSpeech = ""
+        } else if (SpeechRecognizer.isRecognitionAvailable(context)) {
+            try {
+                val recognizer = speechRecognizerRef ?: SpeechRecognizer.createSpeechRecognizer(context).also {
+                    speechRecognizerRef = it
+                }
+                val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                }
+                recognizer.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        isListeningLive = true
+                        livePartialSpeech = "Listening... speak now"
+                    }
+
+                    override fun onBeginningOfSpeech() {
+                        livePartialSpeech = "Capturing voice..."
+                    }
+
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+
+                    override fun onEndOfSpeech() {
+                        isListeningLive = false
+                    }
+
+                    override fun onError(error: Int) {
+                        isListeningLive = false
+                        livePartialSpeech = ""
+                        // Fallback to system speech dialog if direct SpeechRecognizer service fails in emulator
+                        launchSpeechIntentFallback()
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        isListeningLive = false
+                        livePartialSpeech = ""
+                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        val bestMatch = matches?.firstOrNull()
+                        if (!bestMatch.isNullOrBlank()) {
+                            appendSpokenText(bestMatch)
+                        }
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) {
+                        val partial = partialResults
+                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()
+                        if (!partial.isNullOrBlank()) {
+                            livePartialSpeech = partial
+                        }
+                    }
+
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+                isListeningLive = true
+                livePartialSpeech = "Initializing microphone..."
+                recognizer.startListening(recognizerIntent)
+            } catch (e: Exception) {
+                isListeningLive = false
+                livePartialSpeech = ""
+                launchSpeechIntentFallback()
+            }
+        } else {
+            launchSpeechIntentFallback()
         }
     }
 
@@ -155,15 +288,7 @@ fun AddEditNoteDialog(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_input_listening))
-            }
-            try {
-                speechLauncher.launch(speechIntent)
-            } catch (e: Exception) {
-                Toast.makeText(context, "Voice recognition service unavailable", Toast.LENGTH_SHORT).show()
-            }
+            startAndroidSpeechRecognition()
         } else {
             Toast.makeText(context, "Microphone permission is required for voice transcription", Toast.LENGTH_SHORT).show()
         }
@@ -171,17 +296,16 @@ fun AddEditNoteDialog(
 
     val triggerVoiceTranscription = {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_input_listening))
-            }
-            try {
-                speechLauncher.launch(speechIntent)
-            } catch (e: Exception) {
-                Toast.makeText(context, "Voice recognition service unavailable", Toast.LENGTH_SHORT).show()
-            }
+            startAndroidSpeechRecognition()
         } else {
             permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    LaunchedEffect(startVoiceOnLaunch) {
+        if (startVoiceOnLaunch) {
+            delay(250L)
+            triggerVoiceTranscription()
         }
     }
 
@@ -274,9 +398,9 @@ fun AddEditNoteDialog(
                             modifier = Modifier.testTag("voice_input_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Mic,
+                                imageVector = if (isListeningLive) Icons.Default.MicOff else Icons.Default.Mic,
                                 contentDescription = stringResource(id = R.string.voice_input),
-                                tint = DarkPrimary
+                                tint = if (isListeningLive) MaterialTheme.colorScheme.error else DarkPrimary
                             )
                         }
 
@@ -326,6 +450,65 @@ fun AddEditNoteDialog(
                     }
                 }
 
+                // Live Speech-to-Text Status Banner
+                AnimatedVisibility(visible = isListeningLive || livePartialSpeech.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = DarkPrimaryContainer,
+                        border = BorderStroke(1.dp, DarkPrimary),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .testTag("live_speech_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Mic,
+                                    contentDescription = null,
+                                    tint = DarkPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = "Voice Dictation (${if (voiceTarget == VoiceDictationTarget.TITLE) "Title" else "Content"})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = DarkPrimary
+                                    )
+                                    Text(
+                                        text = livePartialSpeech.ifBlank { "Speak now..." },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = DarkOnPrimaryContainer
+                                    )
+                                }
+                            }
+                            TextButton(
+                                onClick = {
+                                    try {
+                                        speechRecognizerRef?.stopListening()
+                                    } catch (_: Exception) {
+                                    }
+                                    isListeningLive = false
+                                    livePartialSpeech = ""
+                                }
+                            ) {
+                                Text("Stop", color = DarkPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Title Input Field
@@ -344,6 +527,7 @@ fun AddEditNoteDialog(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onFocusChanged { if (it.isFocused) voiceTarget = VoiceDictationTarget.TITLE }
                         .testTag("note_title_input")
                 )
 
@@ -468,6 +652,7 @@ fun AddEditNoteDialog(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onFocusChanged { if (it.isFocused) voiceTarget = VoiceDictationTarget.CONTENT }
                         .testTag("note_content_input")
                 )
 
@@ -578,7 +763,7 @@ fun AddEditNoteDialog(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                // Dynamic Word and Character Count Indicator
+                // Dynamic Word and Character Count Indicator + Voice Input Controls
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -614,28 +799,57 @@ fun AddEditNoteDialog(
                         }
                     }
 
-                    AssistChip(
-                        onClick = { triggerVoiceTranscription() },
-                        label = { Text(stringResource(id = R.string.voice_input), fontSize = 11.sp) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Mic,
-                                contentDescription = null,
-                                tint = DarkPrimary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        },
-                        shape = RoundedCornerShape(8.dp),
-                        colors = AssistChipDefaults.assistChipColors(
-                            containerColor = DarkPrimaryContainer,
-                            labelColor = DarkOnPrimaryContainer
-                        ),
-                        border = AssistChipDefaults.assistChipBorder(
-                            enabled = true,
-                            borderColor = DarkOutline
-                        ),
-                        modifier = Modifier.testTag("dictate_chip_button")
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(
+                            selected = voiceTarget == VoiceDictationTarget.TITLE,
+                            onClick = {
+                                voiceTarget = if (voiceTarget == VoiceDictationTarget.TITLE) {
+                                    VoiceDictationTarget.CONTENT
+                                } else {
+                                    VoiceDictationTarget.TITLE
+                                }
+                            },
+                            label = {
+                                Text(
+                                    text = if (voiceTarget == VoiceDictationTarget.TITLE) "Mic: Title" else "Mic: Body",
+                                    fontSize = 10.sp
+                                )
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("voice_target_chip")
+                        )
+
+                        AssistChip(
+                            onClick = { triggerVoiceTranscription() },
+                            label = {
+                                Text(
+                                    text = if (isListeningLive) "Stop Mic" else stringResource(id = R.string.voice_input),
+                                    fontSize = 11.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (isListeningLive) Icons.Default.MicOff else Icons.Default.Mic,
+                                    contentDescription = null,
+                                    tint = if (isListeningLive) MaterialTheme.colorScheme.error else DarkPrimary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = AssistChipDefaults.assistChipColors(
+                                containerColor = DarkPrimaryContainer,
+                                labelColor = DarkOnPrimaryContainer
+                            ),
+                            border = AssistChipDefaults.assistChipBorder(
+                                enabled = true,
+                                borderColor = DarkOutline
+                            ),
+                            modifier = Modifier.testTag("dictate_chip_button")
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))

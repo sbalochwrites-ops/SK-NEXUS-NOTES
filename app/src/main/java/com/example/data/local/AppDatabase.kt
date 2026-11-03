@@ -5,9 +5,14 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [NoteEntity::class], version = 2, exportSchema = false)
+@Database(
+    entities = [NoteEntity::class, RecentSearchEntity::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
+    abstract fun recentSearchDao(): RecentSearchDao
 
     companion object {
         @Volatile

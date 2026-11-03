@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.firestore.FirestoreNoteRepository
 import com.example.data.local.AppDatabase
+import com.example.data.local.BackupSerializer
 import com.example.data.local.NoteEntity
+import com.example.data.local.RecentSearchEntity
 import com.example.data.repository.NoteRepository
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -15,7 +17,9 @@ import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -95,6 +99,9 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     private val _isAddEditOpen = MutableStateFlow(false)
     val isAddEditOpen: StateFlow<Boolean> = _isAddEditOpen.asStateFlow()
 
+    private val _startVoiceOnOpen = MutableStateFlow(false)
+    val startVoiceOnOpen: StateFlow<Boolean> = _startVoiceOnOpen.asStateFlow()
+
     private val _editingNote = MutableStateFlow<NoteEntity?>(null)
     val editingNote: StateFlow<NoteEntity?> = _editingNote.asStateFlow()
 
@@ -104,22 +111,37 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     private val _cloudSyncStatus = MutableStateFlow<String?>(null)
     val cloudSyncStatus: StateFlow<String?> = _cloudSyncStatus.asStateFlow()
 
+    private val _backupOperationStatus = MutableStateFlow<String?>(null)
+    val backupOperationStatus: StateFlow<String?> = _backupOperationStatus.asStateFlow()
+
+    private var searchHistoryDebounceJob: Job? = null
+
     val allNotesList: StateFlow<List<NoteEntity>>
 
     val allTagsList: StateFlow<List<String>>
+
+    val recentSearches: StateFlow<List<RecentSearchEntity>>
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val notesState: StateFlow<List<NoteEntity>>
 
     init {
-        val noteDao = AppDatabase.getDatabase(application).noteDao()
-        repository = NoteRepository(noteDao)
+        val database = AppDatabase.getDatabase(application)
+        val noteDao = database.noteDao()
+        val recentSearchDao = database.recentSearchDao()
+        repository = NoteRepository(noteDao, recentSearchDao)
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.seedInitialDataIfEmpty()
         }
 
         allNotesList = repository.allNotes.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+        recentSearches = repository.recentSearches.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
@@ -183,6 +205,43 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onSearchQueryChange(query: String) {
         _searchQuery.value = query
+        searchHistoryDebounceJob?.cancel()
+        val trimmed = query.trim()
+        if (trimmed.length >= 2) {
+            searchHistoryDebounceJob = viewModelScope.launch {
+                delay(1200L)
+                repository.saveRecentSearch(trimmed)
+            }
+        }
+    }
+
+    fun onSearchSubmitted(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isNotEmpty()) {
+            searchHistoryDebounceJob?.cancel()
+            viewModelScope.launch {
+                repository.saveRecentSearch(trimmed)
+            }
+        }
+    }
+
+    fun onSelectRecentSearch(query: String) {
+        _searchQuery.value = query
+        viewModelScope.launch {
+            repository.saveRecentSearch(query)
+        }
+    }
+
+    fun onDeleteRecentSearch(query: String) {
+        viewModelScope.launch {
+            repository.deleteRecentSearch(query)
+        }
+    }
+
+    fun onClearRecentSearches() {
+        viewModelScope.launch {
+            repository.clearAllRecentSearches()
+        }
     }
 
     fun onCategorySelected(category: String) {
@@ -210,26 +269,66 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onOpenAddNote() {
+    fun onOpenAddNote(startVoiceImmediately: Boolean = false) {
         _editingNote.value = null
         _aiAssistState.value = AiAssistState.Idle
+        _startVoiceOnOpen.value = startVoiceImmediately
         _isAddEditOpen.value = true
     }
 
     fun onOpenEditNote(note: NoteEntity) {
+        val activeSearch = _searchQuery.value.trim()
+        if (activeSearch.isNotEmpty()) {
+            viewModelScope.launch {
+                repository.saveRecentSearch(activeSearch)
+            }
+        }
         _editingNote.value = note
         _aiAssistState.value = AiAssistState.Idle
+        _startVoiceOnOpen.value = false
         _isAddEditOpen.value = true
     }
 
     fun onCloseDialog() {
         _isAddEditOpen.value = false
+        _startVoiceOnOpen.value = false
         _editingNote.value = null
         _aiAssistState.value = AiAssistState.Idle
     }
 
     fun clearAiAssistState() {
         _aiAssistState.value = AiAssistState.Idle
+    }
+
+    fun updateBackupStatus(message: String?) {
+        _backupOperationStatus.value = message
+    }
+
+    fun importNotesFromRawBackup(rawContent: String, onComplete: (Int, String) -> Unit = { _, _ -> }) {
+        viewModelScope.launch {
+            try {
+                val parsedNotes = BackupSerializer.parseAuto(rawContent)
+                if (parsedNotes.isEmpty()) {
+                    val msg = "No valid notes found in the selected file."
+                    _backupOperationStatus.value = msg
+                    onComplete(0, msg)
+                    return@launch
+                }
+                val importedCount = repository.importNotes(parsedNotes)
+                val statusMsg = if (importedCount > 0) {
+                    "Successfully restored $importedCount notes into Room Database."
+                } else {
+                    "All ${parsedNotes.size} notes from backup already exist in your database."
+                }
+                _backupOperationStatus.value = statusMsg
+                onComplete(importedCount, statusMsg)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to import notes from backup", e)
+                val errMsg = "Import failed: ${e.localizedMessage ?: "Invalid file format"}"
+                _backupOperationStatus.value = errMsg
+                onComplete(0, errMsg)
+            }
+        }
     }
 
     fun enhanceNoteWithGemini(
