@@ -8,6 +8,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -31,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.filled.Add
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FormatBold
 import androidx.compose.material.icons.filled.FormatItalic
 import androidx.compose.material.icons.filled.Mic
@@ -142,6 +145,15 @@ fun AddEditNoteDialog(
 
     var autoSaveStatus by remember { mutableStateOf<String?>(null) } // "saving", "saved", null
     var showDeleteConfirmation by remember { mutableStateOf(false) }
+    var hasAttemptedSave by remember(note) { mutableStateOf(false) }
+
+    val validationResult = remember(title, content) {
+        NoteEntity.validateInput(title = title, body = content)
+    }
+    val showTitleError = hasAttemptedSave && validationResult.titleError != null
+    val showBodyError = hasAttemptedSave && validationResult.bodyError != null
+
+    BackHandler(onBack = onDismiss)
 
     // Speech-to-Text state
     var voiceTarget by remember { mutableStateOf(VoiceDictationTarget.CONTENT) }
@@ -309,7 +321,7 @@ fun AddEditNoteDialog(
         }
     }
 
-    // Auto-save debounced effect
+    // Auto-save debounced effect (only runs when both title and body pass validation)
     LaunchedEffect(title, content, category, tagsList, isPinned) {
         val joinedTags = tagsList.joinToString(", ")
         val isInitialState = note != null &&
@@ -319,7 +331,7 @@ fun AddEditNoteDialog(
                 joinedTags == note.tags &&
                 isPinned == note.isPinned
 
-        if (!isInitialState && (title.isNotBlank() || content.isNotBlank())) {
+        if (!isInitialState && NoteEntity.validateInput(title, content).isValid) {
             autoSaveStatus = "saving"
             delay(1200)
             onAutoSave(
@@ -343,7 +355,8 @@ fun AddEditNoteDialog(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .testTag("note_composition_screen"),
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -355,39 +368,57 @@ fun AddEditNoteDialog(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                // Header Row with Title, Auto-save Indicator & Actions (Mic, Share, Delete)
+                // Header Row with Back Navigation, Title, Auto-save Indicator & Actions (Mic, Share, Delete)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(id = if (note == null && currentNoteId == null) R.string.add_note else R.string.edit_note),
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("navigate_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Notes",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Column {
+                            Text(
+                                text = stringResource(id = if (note == null && currentNoteId == null) R.string.add_note else R.string.edit_note),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
 
-                        if (autoSaveStatus != null) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(top = 2.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (autoSaveStatus == "saved") Icons.Default.Check else Icons.Default.Sync,
-                                    contentDescription = null,
-                                    tint = if (autoSaveStatus == "saved") DarkPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = if (autoSaveStatus == "saved") stringResource(id = R.string.auto_saved) else stringResource(id = R.string.saving),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (autoSaveStatus == "saved") DarkPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp
-                                )
+                            if (autoSaveStatus != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (autoSaveStatus == "saved") Icons.Default.Check else Icons.Default.Sync,
+                                        contentDescription = null,
+                                        tint = if (autoSaveStatus == "saved") DarkPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = if (autoSaveStatus == "saved") stringResource(id = R.string.auto_saved) else stringResource(id = R.string.saving),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (autoSaveStatus == "saved") DarkPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -511,15 +542,28 @@ fun AddEditNoteDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Title Input Field
+                // Title Input Field with non-empty validation check
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text(stringResource(id = R.string.title)) },
+                    placeholder = { Text("Enter a descriptive note title...") },
                     singleLine = true,
+                    isError = showTitleError,
+                    supportingText = if (showTitleError) {
+                        {
+                            Text(
+                                text = validationResult.titleError ?: "",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.testTag("title_validation_error")
+                            )
+                        }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = DarkPrimary,
                         unfocusedBorderColor = DarkOutline,
+                        errorBorderColor = MaterialTheme.colorScheme.error,
                         focusedLabelColor = DarkPrimary,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -635,16 +679,29 @@ fun AddEditNoteDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Content Input Field
+                // Content / Body Input Field with meaningful content validation check
                 OutlinedTextField(
                     value = content,
                     onValueChange = { content = it },
                     label = { Text(stringResource(id = R.string.content)) },
+                    placeholder = { Text("Write your note body here (at least 3 characters)...") },
                     minLines = 4,
                     maxLines = 8,
+                    isError = showBodyError,
+                    supportingText = if (showBodyError) {
+                        {
+                            Text(
+                                text = validationResult.bodyError ?: "",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.testTag("body_validation_error")
+                            )
+                        }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = DarkPrimary,
                         unfocusedBorderColor = DarkOutline,
+                        errorBorderColor = MaterialTheme.colorScheme.error,
                         focusedLabelColor = DarkPrimary,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -1084,9 +1141,43 @@ fun AddEditNoteDialog(
                     )
                 }
 
+                // Validation Error Summary Banner (shown if user tries to save with invalid title or body)
+                AnimatedVisibility(visible = hasAttemptedSave && !validationResult.isValid) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp)
+                            .testTag("validation_error_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = validationResult.titleError ?: validationResult.bodyError ?: "Please check your note fields.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Bottom Buttons (Cancel & Save)
+                // Bottom Buttons (Cancel & Save / Update Note)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End,
@@ -1106,8 +1197,15 @@ fun AddEditNoteDialog(
 
                     Button(
                         onClick = {
-                            val joinedTags = tagsList.joinToString(", ")
-                            onSave(title, content, category, joinedTags, isPinned)
+                            hasAttemptedSave = true
+                            val check = NoteEntity.validateInput(title = title, body = content)
+                            if (!check.isValid) {
+                                val errorMsg = check.titleError ?: check.bodyError ?: "Invalid note input"
+                                Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                val joinedTags = tagsList.joinToString(", ")
+                                onSave(title.trim(), content.trim(), category, joinedTags, isPinned)
+                            }
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DarkPrimary,

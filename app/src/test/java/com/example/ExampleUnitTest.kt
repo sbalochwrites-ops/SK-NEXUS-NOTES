@@ -110,4 +110,21 @@ class ExampleUnitTest {
         assertEquals(1, imported)
         assertEquals(1, repository.allNotes.first().size)
     }
+
+    @Test
+    fun verify_note_title_and_meaningful_body_validation() {
+        val emptyTitleResult = NoteEntity.validateInput(title = "   ", body = "Valid note body content")
+        assertTrue(!emptyTitleResult.isValid)
+        assertTrue(emptyTitleResult.titleError != null)
+
+        val shortBodyResult = NoteEntity.validateInput(title = "Meeting Notes", body = "hi")
+        assertTrue(!shortBodyResult.isValid)
+        assertTrue(shortBodyResult.bodyError != null)
+
+        val validResult = NoteEntity.validateInput(title = "Project Roadmap", body = "Complete Room DAO and Jetpack Compose UI.")
+        assertTrue(validResult.isValid)
+        assertEquals(null, validResult.titleError)
+        assertEquals(null, validResult.bodyError)
+    }
 }
+

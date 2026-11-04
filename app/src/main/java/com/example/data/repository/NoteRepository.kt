@@ -35,6 +35,10 @@ class NoteRepository(
         }
     }
 
+    suspend fun getNoteById(id: Long): NoteEntity? = withContext(Dispatchers.IO) {
+        noteDao.getNoteById(id)
+    }
+
     suspend fun insertNote(note: NoteEntity): Long = withContext(Dispatchers.IO) {
         noteDao.insertNote(note)
     }

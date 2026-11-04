@@ -40,6 +40,9 @@ interface NoteDao {
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNoteById(id: Long)
 
+    @Query("SELECT * FROM notes WHERE id = :id LIMIT 1")
+    suspend fun getNoteById(id: Long): NoteEntity? = null
+
     @Query("UPDATE notes SET isPinned = :isPinned WHERE id = :id")
     suspend fun setPinned(id: Long, isPinned: Boolean)
 }

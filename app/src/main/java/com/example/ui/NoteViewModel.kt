@@ -446,7 +446,8 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onSaveNote(title: String, content: String, category: String, tags: String, isPinned: Boolean) {
-        if (title.isBlank() && content.isBlank()) return
+        val validation = NoteEntity.validateInput(title = title, body = content)
+        if (!validation.isValid) return
 
         viewModelScope.launch {
             val currentEditing = _editingNote.value
@@ -464,7 +465,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
                 savedId = updated.id
             } else {
                 val newNote = NoteEntity(
-                    title = title.trim().ifEmpty { "Untitled Note" },
+                    title = title.trim(),
                     content = content.trim(),
                     category = category,
                     tags = tags.trim(),
@@ -478,7 +479,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
             // Mirror to Firestore asynchronously if signed in
             try {
                 firestoreRepository.createNote(
-                    title = title.trim().ifEmpty { "Untitled Note" },
+                    title = title.trim(),
                     content = content.trim(),
                     category = category,
                     tags = tags.trim(),
@@ -500,7 +501,7 @@ class NoteViewModel(application: Application) : AndroidViewModel(application) {
         isPinned: Boolean,
         onSaved: (Long) -> Unit
     ) {
-        if (title.isBlank() && content.isBlank()) return
+        if (!NoteEntity.validateInput(title = title, body = content).isValid) return
 
         viewModelScope.launch {
             if (currentId != null && currentId > 0L) {
